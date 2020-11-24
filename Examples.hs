@@ -5,7 +5,9 @@ import NelderMeadRandom as O1
 import LineOptimization as O2
 import LineFalsification
 import System.Random( mkStdGen )
-import Data.List( transpose, sort )
+import Data.List( transpose, sort, nub, tails )
+import Data.Char( ord, chr )
+import qualified Data.Map as M
 
 --------------------------------------------------------------------------------
 
@@ -16,7 +18,21 @@ main =
        | (i,(x,y)) <- progress ([1..] `zip` xys')
        ]
  where
-  delta = 0.1
+-- {-
+  k = 10
+  n = k+1
+  f = sat' k
+  (aL,aR) = (0,1)
+  sh xs = map (\x -> fst (index x k)) xs
+  p (xs,y) = y <= 0
+-- -}
+{-
+  n = 20
+  f = parse 0 9999 9999 [(0,0.0)]
+  (aL,aR) = (0,255)
+  sh xs = map (chr . round) xs
+  p (xs,y) = y <= 0.1
+-}
 {-
   k = 5
   n = k*k
@@ -33,13 +49,13 @@ main =
   sh xs = map round xs
   p (xs,y) = y <= 0.1
 -}
--- {-
+{-
   n = 15
   f = koen
   (aL,aR) = (-10,10)
   sh = map (\x -> fromIntegral (round (x*10)) / 10)
   p (xs,y) = y <= 0.1
--- -}
+-}
 {-
   n = 1
   f = sines -- alpine1
@@ -57,7 +73,7 @@ main =
 {-
   n = 3
   f = wolfe
-  (aL,aR) = (-1,2)
+  (aL,aR) = (-3,10)
   sh = map $ \x -> fromIntegral (round (x*10)) / 10
   p (xs,y) = y <= 0.001
 -}
@@ -70,15 +86,9 @@ main =
 -}
   xys' = takeUntil p xys
 
-  xys :: [([Double],Double)]  
-  --xys = [ (x,y) | (x,y,_) <- minimize (replicate n 10) (replicate n 0) f ]
-  --xys = O1.minimizeBox (mkStdGen 11) f [(aL,aR) | i <- [1..n]]
-  --xys = O2.minimizeBox (mkStdGen 114) f [(aL,aR) | i <- [1..n]]
-  --xys = O3.minimizeBox (mkStdGen 12) f [(aL,aR) | i <- [1..n]]
+  xys :: [([Double],Double)]
   xys = falsifyBox (mkStdGen 1113111) f [(aL,aR) | i <- [1..n]]
-  --xys = F2.falsifyBox (mkStdGen 11111) f [(aL,aR) | i <- [1..n]]
-  --xys = [ ([x],y) | (x,y) <- falsifyLine (\x -> f (replicate n x)) aL (0,1) aR ]
-  --xys = O3.minimizeBox (mkStdGen 114) (\[x] -> f (replicate n x)) [(aL,aR)]
+  --xys = O2.minimizeBox (mkStdGen 1113111) f [(aL,aR) | i <- [1..n]]
 
 progress ((i,(xs,a)):xsas) = (i,(xs,a)) : go a xsas
  where
@@ -180,11 +190,122 @@ magic2 k xs =
   xas = xs `zip` [1..]
   ads = [ (a,x) | (x,a) <- sort xas ]
 
-  mat = takeWhile (not . null) . map (take k) . iterate (drop k) $ map fst ads
+  mat = group k $ map fst ads
   tot = sum [ 1 .. k*k ] `div` k
 
   diag1 = [ (mat!!i)!!i | i <- [0..k-1] ]
   diag2 = [ (mat!!i)!!(k-1-i) | i <- [0..k-1] ]
 
 --------------------------------------------------------------------------------
+
+parse q0 q1 q2 ds (c:s) =
+  parse q0' q1' q2' ds' s
+ where
+  cOpen  = (c ==. '(') &&. q0
+  cPlus  = (c ==. '+') &&. (q1 ||. q2)
+  cDigit = foldr1 (||.) [ c ==. w | w <- ['0'..'9'] ] &&. (q0 ||. q1)
+  cClose = (c ==. ')') &&. (q1 ||. q2) &&. foldr (||.) 0 [ q | (i,q) <- ds, i <= 0 ]
+ 
+  q0' = cOpen ||. cPlus
+  q1' = cDigit
+  q2' = cClose
+  ds' = combine $
+        [ (i,  q &&. (cDigit ||. cPlus)) | (i,q) <- ds] ++
+        [ (i+1,q &&. cOpen)              | (i,q) <- ds] ++
+        [ (i-1,q &&. cClose)             | (i,q) <- ds]
+   where
+    combine ds =
+      [ (i, foldr1 (||.) [ q | (j,q) <- ds, j == i ])
+      | i <- nub [ i | (i,_) <- ds ]
+      ]
+
+parse q0 q1 q2 ds [] =
+  (ds =. 0) &&. (q1 ||. q2)
+
+(==.) :: Double -> Char -> Double
+c ==. w
+  | round c == ord w = 0.0
+  | otherwise        = abs (c - w')
+ where
+  w' = fromIntegral (ord w)
+
+(&&.), (||.) :: Double -> Double -> Double
+x ||. y = x `min` y -- 1/((1/x) + (1/y))
+x &&. y = x + y
+
+(=.) :: Eq a => [(a,Double)] -> a -> Double
+xs =. x = head [ q | (y,q) <- xs, y == x ]
+
+--------------------------------------------------------------------------------
+
+sat :: Int -> [Double] -> Double
+sat k xs =
+  problem $ pos ++ neg
+ where
+  mat = group k xs
+
+  pos =
+    [ disj ps
+    | ps <- mat
+    ]
+    
+  neg =
+    drop 1 $
+    [ disj [-r,-s]
+    | qs <- transpose mat
+    , r:rs <- tails qs
+    , s <- rs
+    ]
+
+  problem cs = sum cs
+  
+  disj xs
+    | any (> 0) xs = 0
+    | otherwise    = 1 + sum [ -x | x <- xs, x <= 0 ]
+    
+sat' :: Int -> [Double] -> Double
+sat' k ys = sum problem
+ where
+  mat = group k $ take (k*(k+1)) $ [1..]
+
+  problem =
+    [ 1 + sum [ d | Just d <- mds ]
+    | let tab = M.fromListWith min
+                [ (l, d)
+                | (ls,y) <- cpos `zip` ys
+                , let (i,d) = index y (length ls)
+                , let l = ls !! i
+                ]
+    , ls <- cneg
+    , let mds = [ M.lookup l tab | l <- ls ]
+    , null [ () | Nothing <- mds ]
+    ]
+
+  cpos =
+    [ ps
+    | ps <- mat
+    ]
+    
+  cneg =
+    init
+    [ [r,s]
+    | qs <- transpose mat
+    , r:rs <- tails qs
+    , s <- rs
+    ]
+    
+--------------------------------------------------------------------------------
+
+group k = takeWhile (not . null) . map (take k) . iterate (drop k)
+
+index :: Double -> Int -> (Int, Double)
+index x n = (i, d)
+ where
+  z = x * fromIntegral n
+  i = floor z `min` (n-1)
+  d = minimum $
+      [ fromIntegral (i+1) - z | i+1 < n ] ++
+      [ z - fromIntegral i     | i-1 >= 0 ]
+
+
 
