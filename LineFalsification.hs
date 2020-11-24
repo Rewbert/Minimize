@@ -54,7 +54,8 @@ mkSegment sIn (xIn,aIn) (xOut,aOut) sOut =
            (True,  True)
              | (xL-xIn) < (xOut-xR) -> xR
              | otherwise            -> xL
-           _                        -> xM
+           _ | xIn < xM && xM < xOut -> xM
+             | otherwise             -> (xIn+xOut) / 2 -- emergency solution
 
 
   -- delta in slope-change if we sample xNew
@@ -95,6 +96,9 @@ falsifyLine f xL (xM,aM) xR = takeUntil ((<0).snd) $ inits ++ go [sg0,sg1,sg2,sg
     sg1R = mkSegment (s sg1L)  (xN,      aN)      (xOut sg1, aOut sg1) (sOut sg1)
     sg2' = mkSegment (s sg1R)  (xIn sg2, aIn sg2) (xOut sg2, aOut sg2) (sOut sg2)
 
+  update sg xN aN _ = error ("update: " ++ show sg)
+
+
 takeUntil p [] = []
 takeUntil p (x:xs)
   | p x        = [x]
@@ -114,14 +118,12 @@ falsifyBox rnd f xsLR = go 0 rnd xs0 a0
     -- generate a random point the box [-1,1]
     (cs,rnd') = generate rnd xsLR
      where
-      generate rnd []         = ([],  rnd)
-      generate rnd (xLR:xsLR) = (clamp c:cs,rnd2)
+      generate rnd []         = ([],        rnd)
+      generate rnd (xLR:xsLR) = (c1:cs,rnd3)
        where
-        (c, rnd1) = randomR (-1, 1 :: Double) rnd
-        (cs,rnd2) = generate rnd1 xsLR
-
-      clamp x -- | -0.3 < x && x < 0.3 = 0
-              | otherwise           = x
+        (c1,rnd1) = randomR (-1, 1 :: Double) rnd
+        (c2,rnd2) = randomR (0,  1 :: Double) rnd1
+        (cs,rnd3) = generate rnd2 xsLR
 
     -- minimizing over the line through xs and ys
     h z      = zipWith3 (\x c (xL,xR) -> xL `max` (xR `min` (x + z*c))) xs cs xsLR
